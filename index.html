@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta content="IE=edge,chrome=1" http-equiv="X-UA-Compatible">
+    <title>Metaballs/Particles Effect</title>
+    <style>
+            html, body {
+                background-color: #000000;
+                margin: 0px;
+                overflow: hidden;
+                width: 100%;
+                height: 100%;
+            }
+            canvas {
+                width: 100%;
+                height: 100%;
+            }
+    </style>
+    <script src="https://ajax.aspnetcdn.com/ajax/jQuery/jquery-3.2.1.min.js"></script>
+</head>
+<body>
+    <canvas></canvas>
+    <div id="info"></div>
+    <script>
+            window.requestAnimationFrame = window.requestAnimationFrame || (function ()
+            {
+                return window.webkitRequestAnimationFrame ||
+                    window.mozRequestAnimationFrame ||
+                    window.oRequestAnimationFrame ||
+                    window.msRequestAnimationFrame ||
+                    function (callback, element)
+                    {
+                        window.setTimeout(callback, 1000 / 60);
+                    };
+            })();
+            var canvas
+                , gl
+                , buffer
+                , vertex_shader, fragment_shader
+                , renderProgram
+                , vertex_position = 0
+                , timeLocation
+                , resolutionLocation
+                , frame
+                , parameters = {
+                    start_time: new Date().getTime()
+                    , time: 0
+                    , screenWidth: 0
+                    , screenHeight: 0
+                }
+
+            start();
+
+            function start()
+            {
+                var ajaxcalls = [];
+                ajaxcalls.push($.get('vs/render.c', function(data) { vertex_shader = data; }));
+                ajaxcalls.push($.get('fs/render.c', function(data) { fragment_shader = data; }));
+                $.when(...ajaxcalls).done(function() 
+                {
+                    init();
+                    animate();
+                });
+            }
+
+            function init()
+            {
+                canvas = document.querySelector('canvas');
+
+                // Initialise WebGL
+                try
+                {
+                    gl = canvas.getContext('experimental-webgl');
+                } catch (error) {}
+
+                if (!gl)
+                {
+                    throw "cannot create webgl context";
+                }
+
+                // Extensions
+                gl.getExtension('OES_standard_derivatives');
+
+                // Create Vertex buffer (2 triangles)
+                buffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0]), gl.STATIC_DRAW);
+ 
+                // Create Frame Buffer for storing the height field
+                // initFrameBuffers();
+
+                // Create Program
+                initRenderProgram();
+                //initPositionProgram();
+                //initVelocityProgram();
+
+                canvas.onmousedown = handleMouseDown;
+                canvas.onmousemove = handleMouseMove;
+                canvas.onmouseup = handleMouseUp;
+                canvas.onwheel = handleWheelScroll;
+                canvas.ontouchstart = ((e) => handleMouseDown(e.touches[0]));
+                canvas.ontouchend = ((e) => handleMouseUp(e.touches[0]));
+                canvas.ontouchmove = ((e) => 
+                    {
+                        handleMouseMove(e.touches[0]);
+                        e.preventDefault();
+                    });
+
+                mousedown = false;
+                mousemove = false;
+                mouseclicked = false;
+                mouseDownX = null;
+                mouseDownY = null;
+                eyeCoordinate = {
+                    radius : 4,
+                    phi : 0.785, 
+                    theta : 0.785
+                };
+            }
+
+            function createLightWaveBuffer()
+            {
+                // Resolution
+                var width = 256;
+                var height = 256;
+                lightWaveVertices = [];
+                
+                for (i = 0; i < height; i++)
+                {
+                    for (j = 0; j < width; j++)
+                    {
+                        var v1x = (i/height)*2 - 1;
+                        var v1y = (j/width)*2 - 1;
+                        var v2x = ((i+1)/height)*2 - 1;
+                        var v2y = ((j+1)/width)*2 - 1;
+                        // Triangle 1
+                        lightWaveVertices.push.apply(lightWaveVertices, [v1x, v1y]);
+                        lightWaveVertices.push.apply(lightWaveVertices, [v1x, v2y]);
+                        lightWaveVertices.push.apply(lightWaveVertices, [v2x, v2y]);
+                        // Triangle 2 
+                        lightWaveVertices.push.apply(lightWaveVertices, [v1x, v1y]);
+                        lightWaveVertices.push.apply(lightWaveVertices, [v2x, v2y]);
+                        lightWaveVertices.push.apply(lightWaveVertices, [v2x, v1y]);
+                    }
+                }
+
+                lightWaveBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, lightWaveBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(lightWaveVertices), gl.STATIC_DRAW);
+            } 
+
+            function initRenderProgram()
+            {
+                renderProgram = createProgram(vertex_shader, fragment_shader);
+                renderUniforms = {
+                    timeLocation        : gl.getUniformLocation(renderProgram, 'time')
+                    ,resolutionLocation : gl.getUniformLocation(renderProgram, 'resolution')
+                    ,positionSampler    : gl.getUniformLocation(renderProgram, 'positionSampler')
+                    ,particlesSampler   : gl.getUniformLocation(renderProgram, 'particlesSampler')
+                    ,velocitySammpler   : gl.getUniformLocation(renderProgram, 'velocitySampler')
+                    ,eyeCoordinate      : gl.getUniformLocation(renderProgram, 'eyeCoordinate')
+                    ,light1             : gl.getUniformLocation(renderProgram, 'light1')
+                    ,light2             : gl.getUniformLocation(renderProgram, 'light2')
+                    ,light3             : gl.getUniformLocation(renderProgram, 'light3')
+                };
+            }
+
+            function createFramebuffer(gl, texture)
+            {
+                fbo = gl.createFramebuffer();
+                gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+                fbo.width = texture.width;
+                fbo.height = texture.height;
+                gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+            }
+
+            function initFrameBuffers()
+            {
+                // Maximum particles is width x height
+                width = 128;
+                height = 128;
+                
+                particlesTexture = createEmptyTexture(gl, width, height);
+                particlesDataFBO = createFramebuffer(gl, particlesTexture);
+
+                positionTexture = createEmptyTexture(gl, width, height);
+                positionFBO = createFramebuffer(gl, positionTexture);
+
+                velocityTexture = createEmptyTexture(gl, width, height);
+                velocityFBO = createFramebuffer(gl, velocityTexture);
+
+                gl.bindTexture(gl.TEXTURE_2D, null);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+                frame = 0;
+            }
+
+            function createProgram(vertex, fragment)
+            {
+                var program = gl.createProgram();
+                var vs = createShader(vertex, gl.VERTEX_SHADER);
+                var fs = createShader('#extension GL_OES_standard_derivatives : enable\n#ifdef GL_ES\nprecision highp float;\n#endif\n\n' + fragment, gl.FRAGMENT_SHADER);
+                if (vs == null || fs == null) return null;
+
+                gl.attachShader(program, vs);
+                gl.attachShader(program, fs);
+                gl.deleteShader(vs);
+                gl.deleteShader(fs);
+                gl.linkProgram(program);
+
+                if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+                {
+                    alert("ERROR:\n" +
+                        "VALIDATE_STATUS: " + gl.getProgramParameter(program, gl.VALIDATE_STATUS) + "\n" +
+                        "ERROR: " + gl.getError() + "\n\n" +
+                        "- Vertex Shader -\n" + vertex + "\n\n" +
+                        "- Fragment Shader -\n" + fragment);
+                    return null;
+                }
+
+                return program;
+            }
+
+            function createShader(src, type)
+            {
+                var shader = gl.createShader(type);
+                gl.shaderSource(shader, src);
+                gl.compileShader(shader);
+                if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS))
+                {
+                    alert((type == gl.VERTEX_SHADER ? "VERTEX" : "FRAGMENT") + " SHADER:\n" + gl.getShaderInfoLog(shader));
+                    return null;
+                }
+                return shader;
+            }
+
+            function createEmptyTexture(gl, width, height, linear=false)
+            {
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0,
+                            gl.RGBA, gl.FLOAT, null);
+                
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, linear ? gl.LINEAR : gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, linear ? gl.LINEAR : gl.NEAREST);
+                
+                return texture;
+            }
+
+            function loadTexture(gl, url)
+            {
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+
+                const level = 0;
+                const internalFormat = gl.RGBA;
+                const width = 1;
+                const height = 1;
+                const border = 0;
+                const srcFormat = gl.RGBA;
+                const srcType = gl.UNSIGNED_BYTE;
+                const pixel = new Uint8Array([0, 125, 255, 255]);
+                gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+                width, height, border, srcFormat, srcType,
+                pixel);
+
+                const image = new Image();
+                image.onload = function() 
+                {
+                    gl.bindTexture(gl.TEXTURE_2D, texture);
+                    gl.texImage2D(gl.TEXTURE_2D, level, internalFormat,
+                                srcFormat, srcType, image);
+                    if (isPowerOf2(image.width) && isPowerOf2(image.height)) 
+                    {
+                        gl.generateMipmap(gl.TEXTURE_2D);
+                    } 
+                    else 
+                    {
+                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+                    }
+                };
+                image.src = url;
+
+                return texture;
+            }
+
+            function isPowerOf2(value)
+            {
+                return (value & (value - 1)) == 0;
+            }
+
+            function resizeCanvas(event)
+            {
+                if (canvas.width  != canvas.clientWidth ||
+                    canvas.height != canvas.clientHeight)
+                {
+                    canvas.width = canvas.clientWidth;
+                    canvas.height = canvas.clientHeight;
+                    parameters.screenWidth = canvas.width;
+                    parameters.screenHeight = canvas.height;
+                    gl.viewport(0, 0, canvas.width, canvas.height);
+                }
+            }
+
+            function handleMouseDown(event)
+            {
+                mousedown = true;
+                mouseDownX = event.clientX;
+                mouseDownY = event.clientY;
+            }
+
+            function handleMouseUp(event)
+            {
+                mousedown = false;
+                mouseclicked = !mousemove;
+                mousemove = false;
+            }
+
+            function handleMouseMove(event)
+            {
+                if (!mousedown)
+                {
+                    return;
+                }
+                mousemove = true;
+                var currentX = event.clientX;
+                var currentY = event.clientY;
+                var deltaX = currentX - mouseDownX;
+                var deltaY = currentY - mouseDownY;
+                eyeCoordinate.theta += (deltaX/10)/180 * Math.PI;
+                eyeCoordinate.phi += (-deltaY/10)/180 * Math.PI; 
+
+                mouseDownY = currentY;
+                mouseDownX = currentX;
+            }
+
+            function handleWheelScroll(event)
+            {
+                var new_radius = eyeCoordinate.radius + event.deltaY/100.0;
+                if (new_radius > 0.0)
+                {
+                    eyeCoordinate.radius = new_radius;
+                }
+            }
+
+            function animate()
+            {
+                resizeCanvas();
+                render();
+                requestAnimationFrame(animate);
+            }
+
+            function render()
+            {
+                if (!renderProgram) return;
+                parameters.time = new Date().getTime() - parameters.start_time;
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+                // Render Program 
+                gl.useProgram(renderProgram);
+
+                /*
+                gl.activeTexture(gl.TEXTURE0);
+                gl.bindTexture(gl.TEXTURE_2D, particlesTexture);
+                gl.activeTexture(gl.TEXTURE1);
+                gl.bindTexture(gl.TEXTURE_2D, positionTexture);
+                gl.activeTexture(gl.TEXTURE2);
+                gl.bindTexture(gl.TEXTURE_2D, velocityTexture);
+                */
+
+                gl.viewport(0, 0, parameters.screenWidth, parameters.screenHeight);
+
+                // Set values to program variables
+                gl.uniform1f(renderUniforms.timeLocation, parameters.time / 1000);
+                gl.uniform2f(renderUniforms.resolutionLocation, parameters.screenWidth, parameters.screenHeight);
+                // gl.uniform1i(renderUniforms.particlesSampler, 0);
+                // gl.uniform1i(renderUniforms.positionSampler, 1);
+                // gl.uniform1i(renderUniforms.velocitySampler, 2);
+                gl.uniform3f(renderUniforms.eyeCoordinate, eyeCoordinate.radius, eyeCoordinate.phi, eyeCoordinate.theta);
+                gl.uniform3f(renderUniforms.light1, 2.0, 2.0, 2.0);
+                gl.uniform3f(renderUniforms.light2, -2.0, 2.0, -2.0);
+                gl.uniform3f(renderUniforms.light3, 0.0, 2.0, 0.0);
+
+                // Render geometry
+                gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+                gl.vertexAttribPointer(vertex_position, 2, gl.FLOAT, false, 0, 0);
+                gl.enableVertexAttribArray(vertex_position);
+                gl.drawArrays(gl.TRIANGLES, 0, 6);
+                gl.disableVertexAttribArray(vertex_position);
+
+                frame = (frame + 1) % 2;
+            }
+
+    </script>
+</body>
+</html>
