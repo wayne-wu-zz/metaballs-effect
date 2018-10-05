@@ -55,8 +55,8 @@
             function start()
             {
                 var ajaxcalls = [];
-                ajaxcalls.push($.get('vs/render.c', function(data) { vertex_shader = data; }));
-                ajaxcalls.push($.get('fs/render.c', function(data) { fragment_shader = data; }));
+                ajaxcalls.push($.get('vs/render.glsl', function(data) { vertex_shader = data; }));
+                ajaxcalls.push($.get('fs/render.glsl', function(data) { fragment_shader = data; }));
                 $.when(...ajaxcalls).done(function() 
                 {
                     init();
@@ -92,9 +92,7 @@
 
                 // Create Program
                 initRenderProgram();
-                //initPositionProgram();
-                //initVelocityProgram();
-
+                
                 canvas.onmousedown = handleMouseDown;
                 canvas.onmousemove = handleMouseMove;
                 canvas.onmouseup = handleMouseUp;
@@ -178,12 +176,9 @@
             function initFrameBuffers()
             {
                 // Maximum particles is width x height
-                width = 128;
-                height = 128;
+                width = 2;
+                height = 2;
                 
-                particlesTexture = createEmptyTexture(gl, width, height);
-                particlesDataFBO = createFramebuffer(gl, particlesTexture);
-
                 positionTexture = createEmptyTexture(gl, width, height);
                 positionFBO = createFramebuffer(gl, positionTexture);
 
@@ -377,9 +372,6 @@
                 // Set values to program variables
                 gl.uniform1f(renderUniforms.timeLocation, parameters.time / 1000);
                 gl.uniform2f(renderUniforms.resolutionLocation, parameters.screenWidth, parameters.screenHeight);
-                // gl.uniform1i(renderUniforms.particlesSampler, 0);
-                // gl.uniform1i(renderUniforms.positionSampler, 1);
-                // gl.uniform1i(renderUniforms.velocitySampler, 2);
                 gl.uniform3f(renderUniforms.eyeCoordinate, eyeCoordinate.radius, eyeCoordinate.phi, eyeCoordinate.theta);
                 gl.uniform3f(renderUniforms.light1, 2.0, 2.0, 2.0);
                 gl.uniform3f(renderUniforms.light2, -2.0, 2.0, -2.0);

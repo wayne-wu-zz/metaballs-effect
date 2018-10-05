@@ -1,5 +1,5 @@
 #define PARTICLESNUM 2
-#define THRESHOLD 0.40
+#define THRESHOLD 0.1
 #define DT 0.1
 #define STEP 0.05
 #define ENTRY 0
@@ -7,12 +7,13 @@
 #define MAXSTEP 400
 #define BBOX_SIZE 2.0
 
+// Uniforms
+
 uniform float time;
 uniform vec2 resolution;
-uniform sampler2D positionSampler;
-uniform sampler2D particlesSampler;
-uniform sampler2D velocitySampler;
 uniform vec3 eyeCoordinate;
+
+uniform sampler2D positionTexture;
 
 uniform vec3 light1;
 uniform vec3 light2;
@@ -47,7 +48,7 @@ bool sphereIntersections(vec3 c, float r, vec3 o, vec3 d, inout float t1, inout 
 
     float det = B*B - 4.0*C;
 
-    if (det < 0.0)
+    if (det <= 0.0)
         return false; // No solution
 
     t1 = -B - sqrt(det);
@@ -166,6 +167,11 @@ float getDistance(Particle p, vec3 pos)
     return length(pos - p.pos);
 }
 
+float sdSphere( vec3 p, vec3 pos, float r)
+{
+    return length(p-pos) - r;
+}
+
 void main()
 {
     vec3 eye     = getCartesian(eyeCoordinate);
@@ -181,7 +187,7 @@ void main()
     float ar = resolution.x / resolution.y;
     right *= ar;
 
-    vec4 background = vec4(0.0);
+    vec4 background = vec4(1.0);
 
     vec3 imagePos = eye + right * u + up * v + forward * f;
     vec3 dir = normalize(imagePos - eye); // perspective view
@@ -198,38 +204,71 @@ void main()
 
     gl_FragColor = background;
 
-    float minT = -1.0;
-
-    float stepSize = -1.0;
+    float minStepSize = 10000.0;
+    int minParticleIndex = -1;
     vec3 pos = imagePos;
+
+    vec3 n;
+    vec4 color;
+
     for (int i = 0; i < MAXSTEP; i++)
     {
-        // Evaluate from each particles
-        float val = 0.0;
-        vec3 n;
-        vec4 color;
         for (int j = 0; j < PARTICLESNUM; j++)
-        {   
-            vec3 normal = pos - p[j].pos;
-            float d = length(normal);
-            if (stepSize < 0.0 || d < stepSize)
-                stepSize = d;
-            if (d > p[j].radius)
-                continue;
-            float w = getFieldValue(p[j].radius, d);
-            val += w;
-            n += w*normalize(normal);
-            color += w*p[j].color;
-        }
-        if (val > THRESHOLD)
         {
-            n /= val;
-            color /= val;
-            gl_FragColor = shade(eye, pos, n, color);
+            Particle ptc = p[j];
+            float sd = sdSphere(pos, ptc.pos, ptc.radius);
+            
+            if(sd < minStepSize)
+            {
+                sd = minStepSize;
+                minParticleIndex = j;
+            }
         }
 
-        pos += STEP;        
+        if (minStepSize < THRESHOLD)
+        {
+            n = normalize(pos - p[minParticleIndex].pos);
+            color = p[minParticleIndex].color;
+            gl_FragColor = shade(eye, pos, n, color);
+            return;
+        }
+
+        pos += minStepSize*dir;
+        i++;
     }
+
+    //float minT = -1.0;
+
+    // float stepSize = -1.0;
+    // vec3 pos = imagePos;
+    // for (int i = 0; i < MAXSTEP; i++)
+    // {
+    //     // Evaluate from each particles
+    //     float val = 0.0;
+    //     vec3 n;
+    //     vec4 color;
+    //     for (int j = 0; j < PARTICLESNUM; j++)
+    //     {   
+    //         vec3 normal = pos - p[j].pos;
+    //         float d = length(normal);
+    //         if (stepSize < 0.0 || d < stepSize)
+    //             stepSize = d;
+    //         if (d > p[j].radius)
+    //             continue;
+    //         float w = getFieldValue(p[j].radius, d);
+    //         val += w;
+    //         n += w*normalize(normal);
+    //         color += w*p[j].color;
+    //     }
+    //     if (val > THRESHOLD)
+    //     {
+    //         n /= val;
+    //         color /= val;
+    //         gl_FragColor = shade(eye, pos, n, color);
+    //     }
+
+    //     pos += STEP;        
+    // }
 
     return;
 }
