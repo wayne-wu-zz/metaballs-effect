@@ -56,7 +56,7 @@
             {
                 var ajaxcalls = [];
                 ajaxcalls.push($.get('vs/render.glsl', function(data) { vertex_shader = data; }));
-                ajaxcalls.push($.get('fs/render.glsl', function(data) { fragment_shader = data; }));
+                ajaxcalls.push($.get('fs/main.glsl', function(data) { fragment_shader = data; }));
                 $.when(...ajaxcalls).done(function() 
                 {
                     init();
@@ -80,6 +80,8 @@
                 }
 
                 // Extensions
+                gl.getExtension('OES_texture_float');
+                gl.getExtension('OES_texture_float_linear');
                 gl.getExtension('OES_standard_derivatives');
 
                 // Create Vertex buffer (2 triangles)
@@ -89,6 +91,8 @@
  
                 // Create Frame Buffer for storing the height field
                 // initFrameBuffers();
+
+                positionTexture = createParticles();
 
                 // Create Program
                 initRenderProgram();
@@ -111,10 +115,45 @@
                 mouseDownX = null;
                 mouseDownY = null;
                 eyeCoordinate = {
-                    radius : 1,
+                    radius : 3,
                     phi : 0.785, 
                     theta : 0.785
                 };
+            }
+
+            function createParticles()
+            {
+                particleNum = 4;
+                var w = 2;
+                var h = 2;
+
+                var positions = new Float32Array(w*h*4);
+
+                for (i = 0; i < w; i++)
+                {
+                    for (j = 0; j < h; j++)
+                    {
+                        var idx = (i*w + j)*4;
+                        positions[idx + 0] = i;
+                        positions[idx + 1] = 0.0;
+                        positions[idx + 2] = j;
+                        positions[idx + 3] = 0.2; // radius
+                    }
+                }
+
+                const texture = gl.createTexture();
+                gl.bindTexture(gl.TEXTURE_2D, texture);
+                gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.FLOAT, positions);
+
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+                gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+                texWidth = w;
+                texHeight = h;
+
+                return texture;
             }
 
             function createLightWaveBuffer()
@@ -154,9 +193,10 @@
                 renderUniforms = {
                     timeLocation        : gl.getUniformLocation(renderProgram, 'time')
                     ,resolutionLocation : gl.getUniformLocation(renderProgram, 'resolution')
-                    ,positionSampler    : gl.getUniformLocation(renderProgram, 'positionSampler')
-                    ,particlesSampler   : gl.getUniformLocation(renderProgram, 'particlesSampler')
-                    ,velocitySammpler   : gl.getUniformLocation(renderProgram, 'velocitySampler')
+                    ,particleNum        : gl.getUniformLocation(renderProgram, 'particleNum')
+                    ,positionTexture    : gl.getUniformLocation(renderProgram, 'positionTexture')
+                    ,texWidth : gl.getUniformLocation(renderProgram, 'texWidth')
+                    ,texHeight: gl.getUniformLocation(renderProgram, 'texHeight')
                     ,eyeCoordinate      : gl.getUniformLocation(renderProgram, 'eyeCoordinate')
                     ,light1             : gl.getUniformLocation(renderProgram, 'light1')
                     ,light2             : gl.getUniformLocation(renderProgram, 'light2')
@@ -194,7 +234,7 @@
             {
                 var program = gl.createProgram();
                 var vs = createShader(vertex, gl.VERTEX_SHADER);
-                var fs = createShader('#extension GL_OES_standard_derivatives : enable\n#ifdef GL_ES\nprecision highp float;\n#endif\n\n' + fragment, gl.FRAGMENT_SHADER);
+                var fs = createShader(fragment, gl.FRAGMENT_SHADER);
                 if (vs == null || fs == null) return null;
 
                 gl.attachShader(program, vs);
@@ -358,14 +398,11 @@
                 // Render Program 
                 gl.useProgram(renderProgram);
 
-                /*
                 gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D, particlesTexture);
-                gl.activeTexture(gl.TEXTURE1);
                 gl.bindTexture(gl.TEXTURE_2D, positionTexture);
-                gl.activeTexture(gl.TEXTURE2);
-                gl.bindTexture(gl.TEXTURE_2D, velocityTexture);
-                */
+
+                console.log(eyeCoordinate.radius);
+
 
                 gl.viewport(0, 0, parameters.screenWidth, parameters.screenHeight);
 
@@ -373,6 +410,9 @@
                 gl.uniform1f(renderUniforms.timeLocation, parameters.time / 1000);
                 gl.uniform2f(renderUniforms.resolutionLocation, parameters.screenWidth, parameters.screenHeight);
                 gl.uniform3f(renderUniforms.eyeCoordinate, eyeCoordinate.radius, eyeCoordinate.phi, eyeCoordinate.theta);
+                gl.uniform1i(renderUniforms.positionTexture, 0);
+                gl.uniform1i(renderUniforms.texWidth, texWidth);
+                gl.uniform1i(renderUniforms.texHeight, texHeight);
                 gl.uniform3f(renderUniforms.light1, 2.0, 2.0, 2.0);
                 gl.uniform3f(renderUniforms.light2, -2.0, 2.0, -2.0);
                 gl.uniform3f(renderUniforms.light3, 0.0, 2.0, 0.0);
